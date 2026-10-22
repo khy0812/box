@@ -14,21 +14,19 @@ st.title("🎬 일별 박스오피스 조회")
 # ==========================================
 # 2. 날짜 선택기 (한국 표준시 KST 기준)
 # ==========================================
-# Streamlit Cloud 서버 시간과 상관없이 한국 시간(Asia/Seoul)으로 어제 날짜를 계산합니다.
+# 해외 배포 서버 시계와 관계없이 한국 시간(Asia/Seoul) 기준으로 어제 날짜를 계산합니다.
 tz_kst = pytz.timezone("Asia/Seoul")
 now_kst = datetime.datetime.now(tz_kst)
 yesterday_date = (now_kst - datetime.timedelta(days=1)).date()
 
-# 달력에서 날짜를 선택할 수 있도록 합니다.
-# 오늘 이전(어제까지)만 선택할 수 있도록 max_value를 설정합니다.
+# 달력 선택기 (최대 선택 가능한 날짜: 어제)
 selected_date = st.date_input(
     label="📅 조회할 날짜를 선택해 주세요 (최대 어제까지 선택 가능):",
     value=yesterday_date,
     max_value=yesterday_date,
-    min_value=datetime.date(2004, 1, 1)  # KOBIS 제공 시작 연도 근처
+    min_value=datetime.date(2004, 1, 1)  # KOBIS 데이터 제공 시작 연도 부근
 )
 
-# API 요청에 쓸 여덟 자리 문자열(YYYYMMDD) 생성
 target_dt = selected_date.strftime("%Y%m%d")
 formatted_date_str = selected_date.strftime("%Y년 %m월 %d일")
 
@@ -42,7 +40,7 @@ if "KOBIS_KEY" not in st.secrets or not st.secrets["KOBIS_KEY"]:
     st.info(
         "**해결 방법:**\n"
         "1. Streamlit Cloud 대시보드 -> App Settings -> Secrets 메뉴로 이동합니다.\n"
-        '2. `KOBIS_KEY = "발급받은_인증키"` 형태로 키를 입력하고 저장해 주세요.'
+        '2. `KOBIS_KEY = "발급받은_인증키"` 형태로 입력하고 저장해 주세요.'
     )
     st.stop()
 
@@ -62,14 +60,14 @@ except requests.exceptions.RequestException as e:
     st.warning(f"상세 오류: {e}")
     st.stop()
 
-# KOBIS API 인증키 오류 확인
+# KOBIS API 오류 응답(faultInfo) 처리
 if "faultInfo" in data:
     fault = data["faultInfo"]
     st.error("🔑 KOBIS API 인증 오류가 발생했습니다.")
     st.warning(
         f"**오류 메시지:** {fault.get('message', '알 수 없는 오류')}\n\n"
         "**확인 사항:**\n"
-        "- Streamlit Secrets에 입력한 `KOBIS_KEY`가 정확한지 확인해 주세요."
+        "- Streamlit Secrets에 입력한 `KOBIS_KEY`가 올바른지 확인해 주세요."
     )
     st.stop()
 
@@ -77,12 +75,11 @@ if "faultInfo" in data:
 box_office_result = data.get("boxOfficeResult", {})
 daily_list = box_office_result.get("dailyBoxOfficeList", [])
 
-# 영화 목록이 비어 있는 경우 안내 문구 표시
 if not daily_list:
     st.warning("⚠️ 그날은 아직 집계 전입니다.")
     st.info(
         "**확인 사항:**\n"
-        "- 선택하신 날짜의 박스오피스 데이터가 아직 KOBIS 시스템에 입력되지 않았거나 데이터가 없는 날짜입니다.\n"
+        "- 선택하신 날짜의 박스오피스 데이터가 아직 KOBIS 시스템에 등록되지 않았거나 데이터가 없는 날짜입니다.\n"
         "- 다른 날짜를 선택해 보세요."
     )
     st.stop()
@@ -118,7 +115,7 @@ def format_rank_change(row):
     else:
         return "-"                  # 변동 없음
 
-# 가공된 데이터열 추가
+# 가공 데이터열 생성
 df["display_movie_nm"] = df.apply(format_movie_name, axis=1)
 df["rank_change_str"] = df.apply(format_rank_change, axis=1)
 
@@ -140,26 +137,50 @@ with col3:
 st.divider()
 
 # ==========================================
-# 7. 관객수 상위 5편 막대그래프 (Plotly)
+# 7. 관객수 상위 5편 막대그래프 (영화별 맞춤 색상 적용)
 # ==========================================
 st.subheader("📊 관객수 상위 5개 영화")
 
-top5_df = df.head(5)
+top5_df = df.head(5).copy()
+
+# 영화 분위기 및 순위에 매칭되는 팔레트 색상 정의 (1위 골드, 2~5위 트렌디 컬러 조합)
+palette = [
+    "#FFD700",  # 1위: 골드 (Gold)
+    "#E63946",  # 2위: 시그니처 딥레드 (Crimson Red)
+    "#457B9D",  # 3위: 모던 스틸블루 (Steel Blue)
+    "#2A9D8F",  # 4위: 딥 에메랄드/틸 (Deep Teal)
+    "#F4A261",  # 5위: 따뜻한 샌드 오렌지 (Warm Orange)
+]
+
+# 영화별 개별 커스텀 색상 매핑
+custom_colors = {
+    row["display_movie_nm"]: palette[idx % len(palette)]
+    for idx, (_, row) in enumerate(top5_df.iterrows())
+}
+
+# 막대그래프 생성
 fig = px.bar(
     top5_df,
     x="display_movie_nm",
     y="audiCnt",
+    color="display_movie_nm",
+    color_discrete_map=custom_colors,
     text_auto=",d",
     labels={"display_movie_nm": "영화명", "audiCnt": "관객수(명)"},
-    color="audiCnt",
-    color_continuous_scale="Blues",
 )
 
+# 그래프 레이아웃 세부 설정 (범례 제거, 텍스트 가독성 강화)
 fig.update_layout(
     xaxis_title=None,
     yaxis_title="관객수 (명)",
-    coloraxis_showscale=False,
+    showlegend=False,  # x축에 영화명이 나오므로 범례는 숨김
     margin=dict(l=20, r=20, t=30, b=20),
+)
+
+# 막대 위 관객수 숫자 텍스트 스타일 조정
+fig.update_traces(
+    textposition="outside",
+    textfont=dict(size=13, color="#333333")
 )
 
 st.plotly_chart(fig, use_container_width=True)
@@ -171,11 +192,11 @@ st.divider()
 # ==========================================
 st.subheader("📋 전체 순위표")
 
-# 표시할 주요 컬럼 구성
+# 주요 컬럼 추출 및 한글화
 display_df = df[["rank", "rank_change_str", "display_movie_nm", "openDt", "audiCnt", "audiAcc", "scrnCnt"]].copy()
 display_df.columns = ["순위", "순위변동", "영화명", "개봉일", "관객수", "누적관객", "스크린수"]
 
-# 천 단위 쉼표 서식 적용
+# 숫자 서식 포맷팅
 display_df["관객수"] = display_df["관객수"].map("{:,}명".format)
 display_df["누적관객"] = display_df["누적관객"].map("{:,}명".format)
 display_df["스크린수"] = display_df["스크린수"].map("{:,}개".format)
